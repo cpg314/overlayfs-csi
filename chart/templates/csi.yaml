@@ -1,0 +1,161 @@
+apiVersion: storage.k8s.io/v1
+kind: CSIDriver
+metadata:
+  name: "{{ .Values.name }}"
+spec:
+  attachRequired: false
+  podInfoOnMount: false
+  volumeLifecycleModes:
+    - Ephemeral
+---
+kind: ServiceAccount
+apiVersion: v1
+metadata:
+  name: "{{ .Values.name }}"
+  namespace: "{{ .Values.namespace }}"
+---
+kind: ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: "{{ .Values.name }}"
+  namespace: "{{ .Values.namespace }}"
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  - apiGroups: [""]
+    resources: ["persistentvolumes"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "watch", "update"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["storageclasses"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["list", "watch", "create", "update", "patch"]
+  - apiGroups: ["snapshot.storage.k8s.io"]
+    resources: ["volumesnapshots"]
+    verbs: ["get", "list"]
+  - apiGroups: ["snapshot.storage.k8s.io"]
+    resources: ["volumesnapshotcontents"]
+    verbs: ["get", "list"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["csinodes"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["volumeattachments"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: "{{ .Values.name }}"
+  namespace: "{{ .Values.namespace }}"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: "{{ .Values.name }}"
+subjects:
+  - kind: ServiceAccount
+    name: "{{ .Values.name }}"
+    namespace: "{{ .Values.namespace }}"
+---
+# This will run on every node
+kind: DaemonSet
+apiVersion: apps/v1
+metadata:
+  name: "{{ .Values.name }}"
+  namespace: "{{ .Values.namespace }}"
+spec:
+  selector:
+    matchLabels:
+      app: "{{ .Values.name }}"
+  template:
+    metadata:
+      labels:
+        app: "{{ .Values.name }}"
+    spec:
+      serviceAccountName: "{{ .Values.name }}"
+      hostNetwork: true
+      containers:
+        - name: node-driver-registrar
+          image: registry.k8s.io/sig-storage/csi-node-driver-registrar:v2.5.0
+          imagePullPolicy: IfNotPresent
+          args:
+            - --csi-address=/csi/csi.sock
+            - "--kubelet-registration-path=/var/lib/kubelet/plugins/{{ .Values.name }}/csi.sock"
+          env:
+            - name: KUBE_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  apiVersion: v1
+                  fieldPath: spec.nodeName
+          volumeMounts:
+            - mountPath: /csi
+              name: socket-dir
+            - mountPath: /registration
+              name: registration-dir
+
+        - name: csi
+          image: "{{ .Values.image }}"
+          imagePullPolicy: Always
+          args:
+            - "--endpoint=/csi/csi.sock"
+            - "--nodeid=$(KUBE_NODE_NAME)"
+            - "--name={{ .Values.name }}"
+            - "--bases=/bases"
+            - "--max-age-s={{ .Values.maxAgeSeconds }}"
+            - "--namespace={{ .Values.namespace }}"
+            - "--size-limit={{ .Values.sizeLimit }}"
+          env:
+            - name: KUBE_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  apiVersion: v1
+                  fieldPath: spec.nodeName
+          securityContext:
+            privileged: true
+          volumeMounts:
+            - mountPath: /bases
+              name: bases
+            - mountPath: /csi
+              name: socket-dir
+            - mountPath: /var/lib/kubelet/pods
+              mountPropagation: Bidirectional
+              name: mountpoint-dir
+            - mountPath: /var/lib/containers/storage
+              mountPropagation: Bidirectional
+              name: storageroot-dir
+            - mountPath: /var/run/containers/storage
+              mountPropagation: Bidirectional
+              name: storagerunroot-dir
+
+      volumes:
+        - name: bases
+          emptyDir:
+            sizeLimit: "{{ .Values.sizeLimit }}"
+        - hostPath:
+            path: "/var/lib/kubelet/plugins/{{ .Values.name }}"
+            type: DirectoryOrCreate
+          name: socket-dir
+        - hostPath:
+            path: /var/lib/kubelet/pods
+            type: DirectoryOrCreate
+          name: mountpoint-dir
+        - hostPath:
+            path: /var/lib/kubelet/plugins_registry
+            type: Directory
+          name: registration-dir
+        - hostPath:
+            path: /var/lib/containers/storage
+            type: DirectoryOrCreate
+          name: storageroot-dir
+        - hostPath:
+            path: /var/run/containers/storage
+            type: DirectoryOrCreate
+          name: storagerunroot-dir

@@ -1,0 +1,9 @@
+namespace: overlayfs-csi
+image: overlayfs-csi:latest
+name: overlayfs.csi.k8s.io
+# Size for the per-node volumes that hold bases
+basesSizeLimit: 10Gi
+# Size for each overlay
+sizeLimit: 10Gi
+# Maximum age of a base before cleaning it up
+maxAgeSeconds: 86400

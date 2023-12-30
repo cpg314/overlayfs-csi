@@ -1,0 +1,33 @@
+[package]
+name = "overlayfs-csi"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0.77"
+async-trait = "0.1.75"
+clap = { version = "4.4.12", features = ["derive"] }
+duct = "0.13.7"
+futures = "0.3.30"
+k8s-openapi = { version = "0.20.0", features = ["v1_23", "schemars"] }
+kube = { version = "0.87.2", features = ["runtime"] }
+prost = "0.12.3"
+prost-types = "0.12.3"
+serde_yaml = "0.9.29"
+time = { version = "0.3.31", features = ["parsing", "formatting"] }
+tokio = { version = "1.35.1", features = ["full"] }
+tokio-stream = { version = "0.1.14", features = ["full"] }
+tonic = { version = "0.10.2", features = ["tls"] }
+tower = "0.4.13"
+tracing = "0.1.40"
+tracing-subscriber = "0.3.18"
+
+[build-dependencies]
+
+anyhow = "1.0.77"
+tokio = { version = "1.35.1", features = ["full"] }
+reqwest = { version = "0.11.23", features = ["rustls-tls"], default_features = false }
+tonic-build = "0.10.2"
+
+[package.metadata.cargo-machete]
+ignored = ["prost", "prost-types"]
