@@ -8,7 +8,7 @@ use clap::Parser;
 use futures::{StreamExt, TryStreamExt};
 use k8s_openapi::api::core::v1::Pod;
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
-use kube::api::{DeleteParams, ListParams, WatchEvent, WatchParams};
+use kube::api::{DeleteParams, WatchEvent, WatchParams};
 use kube::Api;
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
@@ -96,26 +96,16 @@ impl AsRef<Path> for PodUid {
 }
 impl Overlays {
     pub async fn from_flags(flags: OverlayFlags, pods: Api<Pod>) -> anyhow::Result<Arc<Self>> {
-        let pods_list = pods
-            .list(&ListParams::default().labels(&format!("app={}", flags.name)))
-            .await?;
-        let pod = pods_list
-            .iter()
-            .find(|pod| {
-                pod.spec
-                    .as_ref()
-                    .and_then(|spec| spec.node_name.as_ref())
-                    .map_or(false, |node| node == &flags.node)
-            })
-            .context("Failed to find CSI pod")?;
         let mut overlays = Self {
             flags,
             pods,
             bases_host: Default::default(),
             lock: Default::default(),
         };
-        overlays.bases_host =
-            overlays.empty_dir(PodUid(pod.metadata.uid.clone().unwrap()), "bases");
+        overlays.bases_host = overlays.empty_dir(
+            PodUid(std::env::var("POD_ID").context("Failed to find pod ID from environment")?),
+            "bases",
+        );
         let overlays = Arc::new(overlays);
         // Cleanup thread
         tokio::task::spawn({
@@ -254,7 +244,7 @@ impl Overlays {
     }
     pub async fn cleanup(&self) -> anyhow::Result<()> {
         let mut mapping = self.lock.lock().await;
-        info!("Cleaning up bases");
+        debug!("Cleaning up bases");
         for base in self.bases()?.filter(|b| !b.valid(self.flags.max_age_s)) {
             // We only clean up bases not tied to a volume.
             // The base might not be in the mapping if it has never been associated with a volume.
@@ -269,20 +259,26 @@ impl Overlays {
     pub async fn unmount(&self, id: &str, mountpoint: impl AsRef<Path>) -> anyhow::Result<()> {
         let mut mapping = self.lock.lock().await;
         let mountpoint = mountpoint.as_ref();
-        info!(id, ?mountpoint, "Unmounting");
         let is_overlay = mapping.values().flatten().any(|v| v == id);
+        let no_valid_base = self.find_valid_base().map_or(true, |o| o.is_none());
+        info!(id, ?mountpoint, is_overlay, no_valid_base, "Unmounting");
         // If this can be used as a base and we need one, transform it
         // TODO: We could also do that a bit before the previous base has expired.
-        if !is_overlay && self.find_valid_base().map_or(true, |o| o.is_none()) {
+        if !is_overlay && no_valid_base {
             // Get the volume path from the pod
             let pod: Pod = self.pods.get(id).await?;
             let volume_dir = self.volume_dir(PodUid(pod.metadata.uid.unwrap()));
             let as_base = volume_dir.join(Base::as_base_filename());
             if as_base.exists() {
                 let base = self.base_host(id).await?;
-                info!(id, ?mountpoint, src=?volume_dir, dst=?base.0, "Transforming volumes into base");
+                info!(id, ?mountpoint, src=?volume_dir, dst=?base.0, "Transforming volume into base");
                 std::fs::rename(volume_dir, &base.0)?;
                 base.write_time()?;
+            } else {
+                warn!(
+                    id,
+                    "Not transforming into base as {:?} does not exist", as_base
+                );
             }
         }
         // Update the mapping so that the base can be cleaned up if necessary.
